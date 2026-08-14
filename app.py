@@ -125,7 +125,264 @@ with tab1:
 # ============================================================
 with tab2:
     st.header("Collaborative Filtering")
-    st.info("🚧 Coming soon — waiting for Jiun Hui's recommend function.")
+    st.write(
+        "Movie recommendations based on user rating behaviour."
+    )
+
+    # 1. Load Collaborative Filtering Data
+    @st.cache_data
+    def load_collaborative_data():
+        ratings = pd.read_csv("data/ratings.csv")
+        links = pd.read_csv("data/links.csv")
+        tmdb = pd.read_csv("data/tmdb_5000_movies.csv")
+
+        # Merge Ratings + Links
+        ratings_links = ratings.merge(
+            links,
+            on="movieId",
+            how="inner"
+        )
+
+        # Merge with TMDB
+        merged = ratings_links.merge(
+            tmdb[
+                [
+                    "id",
+                    "title",
+                    "genres",
+                    "vote_average",
+                    "vote_count"
+                ]
+            ],
+            left_on="tmdbId",
+            right_on="id",
+            how="inner"
+        )
+        return merged
+    
+    data_cf = load_collaborative_data()
+
+    # 2. Movie Statistics
+    movie_stats = (
+        data_cf
+        .groupby("title")["rating"]
+        .agg(
+            average_rating="mean",
+            number_of_ratings="count"
+        )
+        .reset_index()
+    )
+
+    movie_stats["average_rating"] = (
+        movie_stats["average_rating"]
+        .round(2)
+    )
+
+    # 3. User-Movie Matrix
+    movie_matrix = data_cf.pivot_table(
+        index="userId",
+        columns="title",
+        values="rating"
+    )
+
+    # 4. Movie Selection
+    movie_list_cf = sorted(
+        movie_matrix.columns.tolist()
+    )
+
+    selected_movie_cf = st.selectbox(
+        "Choose a movie:",
+        movie_list_cf,
+        key="cf_movie"
+    )
+
+    # 5. Number of Recommendations
+    top_n_cf = st.slider(
+        "Number of recommendations:",
+        min_value=5,
+        max_value=20,
+        value=10,
+        key="cf_slider"
+    )
+
+    # 6. Generate Recommendations
+    if st.button(
+        "Get Collaborative Recommendations",
+        key="cf_button"
+    ):
+
+        # Calculate Correlation
+        similar = movie_matrix.corrwith(
+            movie_matrix[selected_movie_cf]
+        )
+
+        corr = pd.DataFrame(
+            similar,
+            columns=["Correlation"]
+        )
+
+        corr.dropna(
+            inplace=True
+        )
+
+        # Remove Selected Movie
+        recommendations = (
+            corr
+            .drop(selected_movie_cf)
+        )
+
+        # Add Movie Statistics
+        recommendations = recommendations.join(
+            movie_stats.set_index("title")[
+                [
+                    "number_of_ratings"
+                ]
+            ]
+        )
+
+        # Filter Movies with Enough Ratings
+        recommendations = recommendations[
+            recommendations["number_of_ratings"] >= 100
+        ]
+
+        # Sort by Correlation
+        recommendations = (
+            recommendations
+            .sort_values(
+                "Correlation",
+                ascending=False
+            )
+        )
+
+        # Take Top N
+        recommendations = (
+            recommendations
+            .head(top_n_cf)
+        )
+
+        # 7. Selected Movie Information
+        selected_info = data_cf[
+            data_cf["title"] == selected_movie_cf
+        ].iloc[0]
+
+
+        selected_stats = movie_stats[
+            movie_stats["title"] == selected_movie_cf
+        ].iloc[0]
+
+
+        st.subheader(
+            "Selected Movie"
+        )
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.write(
+                "**Movie Title**"
+            )
+            st.write(
+                selected_movie_cf
+            )
+
+        with col2:
+            st.write(
+                "**Average User Rating**"
+            )
+            st.write(
+                selected_stats["average_rating"]
+            )
+
+        with col3:
+            st.write(
+                "**Number of User Ratings**"
+            )
+            st.write(
+                int(
+                    selected_stats[
+                        "number_of_ratings"
+                    ]
+                )
+            )
+
+        with col4:
+            st.write(
+                "**TMDB Rating**"
+            )
+            st.write(
+                selected_info[
+                    "vote_average"
+                ]
+            )
+
+        # 8. Recommended Movies
+        st.subheader(
+            "Recommended Movies"
+        )
+
+        if recommendations.empty:
+            st.warning(
+                "No recommendations found."
+            )
+        else:
+            result = (
+                recommendations
+                .reset_index()
+            )
+
+            # Add Rank
+            result.insert(
+                0,
+                "Rank",
+                range(
+                    1,
+                    len(result) + 1
+                )
+            )
+
+            # Rename Columns
+            result = result.rename(
+                columns={
+                    "title":
+                        "Movie Title",
+
+                    "Correlation":
+                        "Correlation Score",
+
+                    "number_of_ratings":
+                        "Number of User Ratings"
+                }
+            )
+
+            # Round Correlation Score
+            result[
+                "Correlation Score"
+            ] = (
+                result[
+                    "Correlation Score"
+                ].round(4)
+            )
+
+            # Display Table
+            st.dataframe(
+                result,
+                use_container_width=True,
+                hide_index=True
+            )
+
+            # 9. Average Correlation
+            avg_correlation = (
+                recommendations[
+                    "Correlation"
+                ].mean()
+            )
+
+            st.caption(
+                f"Average Correlation Score "
+                f"of Top {len(recommendations)} "
+                f"Recommendations: "
+                f"{avg_correlation:.4f}"
+            )
 
 # ============================================================
 # TAB 3: HYBRID FILTERING (Shi Min)
