@@ -6,6 +6,21 @@ import ast
 import difflib
 
 st.set_page_config(page_title="Movie Recommender System", layout="wide")
+
+st.markdown("""
+    <style>
+    h1, h2, h3, h4, h5, h6 {
+        color: #000000 !important;
+    }
+    p, div, span, label {
+        color: #000000 !important;
+    }
+    .stMarkdown {
+        color: #000000 !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("🎬 Movie Recommender System")
 st.write("A group project combining Content-Based, Collaborative, and Hybrid Filtering")
 
