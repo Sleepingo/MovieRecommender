@@ -147,35 +147,62 @@ with tab2:
     # 1. Load Collaborative Filtering Data
     @st.cache_data
     def load_collaborative_data():
-        ratings = pd.read_csv("data/ratings.csv")
-        links = pd.read_csv("data/links.csv")
-        tmdb = pd.read_csv("data/tmdb_5000_movies.csv")
 
-        # Merge Ratings + Links
-        ratings_links = ratings.merge(
-            links,
-            on="movieId",
-            how="inner"
+        # Load Ratings
+        ratings = pd.read_csv(
+            "data/tmdb_movie_ratings.csv",
+            usecols=[
+                "userId",
+                "ratingId",
+                "rating"
+            ]
         )
 
-        # Merge with TMDB
-        merged = ratings_links.merge(
-            tmdb[
-                [
-                    "id",
-                    "title",
-                    "genres",
-                    "vote_average",
-                    "vote_count"
-                ]
-            ],
-            left_on="tmdbId",
-            right_on="id",
-            how="inner"
+        # Limit users
+        ratings = ratings[
+            ratings["userId"] <= 600
+        ].copy()
+
+        # Load TMDB Movie Dataset
+        movies = pd.read_csv(
+            "data/tmdb_movie_dataset.csv",
+            usecols=[
+                "ratingId",
+                "tmdbId",
+                "title",
+                "vote_average",
+                "vote_count"
+            ]
         )
+
+        # Keep only required columns
+        movies = movies.drop_duplicates(
+            subset="ratingId"
+        )
+
+        merged = ratings.merge(
+                movies,
+                on="ratingId",
+                how="inner"
+            )
+        merged = merged[
+            [
+                "userId",
+                "ratingId",
+                "rating",
+                "tmdbId",
+                "title",
+                "vote_average",
+                "vote_count"
+            ]
+        ]
+
         return merged
     
     data_cf = load_collaborative_data()
+    print("CF Data Shape:", data_cf.shape)
+    print("Number of Users:", data_cf["userId"].nunique())
+    print("Number of Movies:", data_cf["title"].nunique())
 
     # 2. Movie Statistics
     movie_stats = (
@@ -193,7 +220,7 @@ with tab2:
         .round(2)
     )
 
-    # 3. User-Movie Matrix
+    # 3. Create User-Movie Matrix
     movie_matrix = data_cf.pivot_table(
         index="userId",
         columns="title",
@@ -246,7 +273,7 @@ with tab2:
             .drop(selected_movie_cf)
         )
 
-        # Add Movie Statistics
+        # Add Number of User Ratings
         recommendations = recommendations.join(
             movie_stats.set_index("title")[
                 [
@@ -255,7 +282,7 @@ with tab2:
             ]
         )
 
-        # Filter Movies with Enough Ratings
+        # Filter Movies with Enough User Ratings
         recommendations = recommendations[
             recommendations["number_of_ratings"] >= 100
         ]
@@ -280,11 +307,9 @@ with tab2:
             data_cf["title"] == selected_movie_cf
         ].iloc[0]
 
-
         selected_stats = movie_stats[
             movie_stats["title"] == selected_movie_cf
         ].iloc[0]
-
 
         st.subheader(
             "Selected Movie"
@@ -307,6 +332,7 @@ with tab2:
             st.write(
                 selected_stats["average_rating"]
             )
+
 
         with col3:
             st.write(
