@@ -34,95 +34,186 @@ with tab1:
 
     @st.cache_data
     def load_data():
-        df = pd.read_csv('data/tmdb_5000_movies.csv')
+        # Use the same TMDB dataset and preprocessing as the
+        # content_based_filtering.ipynb notebook.
+        df = pd.read_csv("data/tmdb_movie_dataset.csv")
 
         def extract_names(text):
             try:
                 items = ast.literal_eval(text)
-                return ", ".join([i['name'] for i in items])
-            except:
-                return ""
+                if isinstance(items, list):
+                    return " ".join(
+                            str(item.get("name", ""))
+                            for item in items
+                            if isinstance(item, dict)
+)
+            except (ValueError, SyntaxError, TypeError):
+                pass
+            return ""
 
-        df['genres_clean'] = df['genres'].apply(extract_names)
-        df['keywords_clean'] = df['keywords'].apply(extract_names)
-        df['year'] = pd.to_datetime(df['release_date'], errors='coerce').dt.year.astype('Int64')
-        df['overview'] = df['overview'].fillna('')
-        df['content'] = df['genres_clean'] + ' ' + df['keywords_clean'] + ' ' + df['overview']
+        df["genres_clean"] = df["genres"].fillna("").apply(extract_names)
+        df["keywords_clean"] = df["keywords"].fillna("").apply(extract_names)
+        df["overview"] = df["overview"].fillna("")
+        df["year"] = pd.to_datetime(
+            df["release_date"], errors="coerce"
+        ).dt.year.astype("Int64")
+
+        df["content"] = (
+            df["genres_clean"] + " " +
+            df["keywords_clean"] + " " +
+            df["overview"]
+        ).str.strip()
+
+        df = df[df["title"].notna()].copy()
+        df["content"] = df["content"].fillna("")
+
         return df
 
     @st.cache_data
     def compute_similarity(df):
-        tfidf = TfidfVectorizer(stop_words='english')
-        tfidf_matrix = tfidf.fit_transform(df['content'])
-        return cosine_similarity(tfidf_matrix, tfidf_matrix)
+        tfidf = TfidfVectorizer(
+        stop_words="english"
+    )
 
+        tfidf_matrix = tfidf.fit_transform(df["content"])
+
+        return cosine_similarity(tfidf_matrix, tfidf_matrix)
+    
     df = load_data()
     cosine_sim = compute_similarity(df)
-    indices = pd.Series(df.index, index=df['title']).drop_duplicates()
+
+    indices = pd.Series(
+        df.index,
+        index=df["title"].str.strip().str.lower()
+    ).drop_duplicates()
+
+    def find_movie_title(title):
+        query = str(title).strip().lower()
+
+        if not query:
+            return None
+
+        if query in indices.index:
+            return df.loc[indices[query], "title"]
+
+        partial_matches = [
+            original_title
+            for original_title in df["title"].dropna().unique()
+            if query in str(original_title).lower()
+        ]
+
+        if partial_matches:
+            return partial_matches[0]
+
+        title_map = {
+            str(t).lower(): str(t)
+            for t in df["title"].dropna().unique()
+        }
+
+        close = difflib.get_close_matches(
+            query, list(title_map.keys()), n=1, cutoff=0.65
+        )
+
+        if close:
+            return title_map[close[0]]
+
+        return None
 
     def get_input_features(title):
-        idx = indices[title]
+        matched_title = find_movie_title(title)
+        if matched_title is None:
+            return None
+
+        idx = indices[matched_title.lower()]
         movie = df.loc[idx]
-        keywords_display = movie['keywords_clean']
+
+        keywords_display = movie["keywords_clean"]
         if len(keywords_display) > 60:
             keywords_display = keywords_display[:60] + "..."
+
         return pd.DataFrame({
-            "title": [movie['title']],
-            "year": [movie['year']],
-            "genres": [movie['genres_clean']],
-            "keywords": [keywords_display],
-            "vote_average": [movie['vote_average']]
+            "title": [movie["title"]],
+            "year": [movie["year"]],
+            "genres": [movie["genres_clean"].replace("_", " ")],
+            "keywords": [keywords_display.replace("_", " ")]
         })
 
     def recommend(title, top_n=10):
-        idx = indices[title]
+        matched_title = find_movie_title(title)
+
+        if matched_title is None:
+            return None
+
+        idx = indices[matched_title.lower()]
         sim_scores = list(enumerate(cosine_sim[idx]))
-        sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:top_n+1]
-        movie_indices = [i[0] for i in sim_scores]
-        scores = [round(s[1], 4) for s in sim_scores]
+        sim_scores = sorted(
+            sim_scores,
+            key=lambda x: x[1],
+            reverse=True
+        )[1:top_n + 1]
 
-        result = df[['title', 'year', 'genres_clean', 'keywords_clean', 'vote_average']].iloc[movie_indices].copy()
-        result.insert(0, 'rank', range(1, len(result) + 1))
-        result['similarity_score'] = scores
+        movie_indices = [i for i, _ in sim_scores]
+        scores = [round(score, 4) for _, score in sim_scores]
 
-       
-        result['keywords_clean'] = result['keywords_clean'].apply(
-            lambda x: ', '.join(x.split(', ')[:5]) if x else ''
+        result = df[
+            ["title", "year", "genres_clean", "keywords_clean"]
+        ].iloc[movie_indices].copy()
+
+        result.insert(0, "rank", range(1, len(result) + 1))
+        result["similarity_score"] = scores
+
+        result["keywords_clean"] = result["keywords_clean"].apply(
+            lambda x: ", ".join(x.split()[:5]) if x else ""
         )
 
         result = result.rename(columns={
-            'title': 'movie_title',
-            'genres_clean': 'genres',
-            'keywords_clean': 'keywords',
-            'vote_average': 'rating'
+            "title": "movie_title",
+            "genres_clean": "genres",
+            "keywords_clean": "keywords"
         })
+
+        # Make the display easier to read without changing the features
+        # used by the recommendation algorithm.
+        result["genres"] = result["genres"].str.replace("_", " ", regex=False)
+        result["keywords"] = result["keywords"].str.replace("_", " ", regex=False)
+
         return result.reset_index(drop=True)
 
     # ---------- UI ----------
-    movie_list = sorted(df['title'].dropna().unique())
+    movie_list = sorted(df["title"].dropna().unique())
 
-    input_method = st.radio("Select input method:", ["Choose from list", "Type movie name"], horizontal=True, key="cb_input_method")
+    input_method = st.radio(
+        "Select input method:",
+        ["Choose from list", "Type movie name"],
+        horizontal=True,
+        key="cb_input_method"
+    )
 
     if input_method == "Choose from list":
-        selected_movie = st.selectbox("Choose a movie:", movie_list, key="cb_selectbox")
+        selected_movie = st.selectbox(
+            "Choose a movie:", movie_list, key="cb_selectbox"
+        )
     else:
-        user_input = st.text_input("Type a movie name (in English, more complete = more accurate):", key="cb_text_input")
+        user_input = st.text_input(
+            "Type a movie name:",
+            key="cb_text_input"
+        )
         selected_movie = None
 
         if user_input:
-            exact_match = [m for m in movie_list if m.lower() == user_input.lower()]
-            if exact_match:
-                selected_movie = exact_match[0]
+            selected_movie = find_movie_title(user_input)
+            if selected_movie:
                 st.success(f"✓ Found: {selected_movie}")
             else:
-                close_matches = difflib.get_close_matches(user_input, movie_list, n=5, cutoff=0.4)
-                if close_matches:
-                    st.write("No exact match found. Did you mean:")
-                    selected_movie = st.selectbox("Select one:", close_matches, key="cb_close_match")
-                else:
-                    st.warning("No matching movie found. Please try a different name.")
+                st.warning(
+                    "No matching movie found. Please try a different name."
+                )
 
-    top_n = st.slider("Number of recommendations:", 5, 20, 10, key="cb_slider")
+    top_n = st.slider(
+        "Number of recommendations:",
+        5, 20, 10,
+        key="cb_slider"
+    )
 
     if st.button("Get Recommendations", key="cb_button") and selected_movie:
         st.subheader("Input Movie Features")
@@ -130,10 +221,17 @@ with tab1:
 
         st.subheader("Recommended Movies")
         results = recommend(selected_movie, top_n)
-        st.dataframe(results, use_container_width=True, hide_index=True)
+        st.dataframe(
+            results,
+            use_container_width=True,
+            hide_index=True
+        )
 
-        avg_score = results['similarity_score'].mean()
-        st.caption(f"Average similarity score of top {top_n} recommendations: {avg_score:.4f}")
+        avg_score = results["similarity_score"].mean()
+        st.caption(
+            f"Average similarity score of top {top_n} recommendations: "
+            f"{avg_score:.4f}"
+        )
 
 # ============================================================
 # TAB 2: COLLABORATIVE FILTERING (Jiun Hui)
