@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import ast
 import difflib
@@ -213,53 +212,48 @@ def load_data():
         .apply(extract_names)
     )
 
-    df["overview"] = (
-        df["overview"]
-        .fillna("")
-    )
-
-    df["year"] = pd.to_datetime(
-        df["release_date"],
-        errors="coerce"
-    ).dt.year.astype("Int64")
-
-    df["content"] = (
-        df["genres_clean"] + " " +
-        df["keywords_clean"] + " " +
-        df["overview"]
-    ).str.strip()
-
     df = df[
         df["title"].notna()
     ].copy()
 
-    df["content"] = (
-        df["content"]
-        .fillna("")
-    )
-
     return df
 
 
-# ============================================================
-# TF-IDF
-# ============================================================
-
 @st.cache_data
 def compute_similarity(df):
+    """
+    Calculate cosine similarity using movie genres and keywords.
+    """
+    
+    all_features = (
+        df["genres_clean"].fillna("") + " " +
+        df["keywords_clean"].fillna("")
+    ).str.strip()
 
-    tfidf = TfidfVectorizer(
-        stop_words="english"
+    # Create binary feature vectors
+    feature_list = sorted(
+        set(
+            " ".join(all_features).split()
+        )
     )
 
-    tfidf_matrix = tfidf.fit_transform(
-        df["content"]
-    )
+    feature_index = {
+        feature: i
+        for i, feature in enumerate(feature_list)
+    }
 
-    return cosine_similarity(
-        tfidf_matrix,
-        tfidf_matrix
-    )
+    matrix = []
+
+    for content in all_features:
+        vector = [0] * len(feature_list)
+
+        for feature in content.split():
+            if feature in feature_index:
+                vector[feature_index[feature]] = 1
+
+        matrix.append(vector)
+
+    return cosine_similarity(matrix, matrix)
 
 
 df = load_data()
@@ -383,9 +377,6 @@ def get_input_features(title):
             movie["title"]
         ],
 
-        "Year": [
-            movie["year"]
-        ],
 
         "Genres": [
             movie["genres_clean"]
@@ -403,56 +394,139 @@ def get_input_features(title):
 # CONTENT RECOMMENDATION
 # ============================================================
 
-def recommend(
-    title,
-    top_n=10
-):
+def recommend(title, top_n=10):
 
-    matched_title = find_movie_title(
-        title
-    )
+    matched_title = find_movie_title(title)
 
     if matched_title is None:
-
         return None
 
     idx = indices[
         matched_title.lower()
     ]
 
-    sim_scores = list(
-        enumerate(
-            cosine_sim[idx]
-        )
+    input_movie = df.loc[idx]
+
+    # -----------------------------
+    # Input movie genres
+    # -----------------------------
+
+    input_genres = set(
+        str(input_movie["genres_clean"]).split()
     )
 
-    sim_scores = sorted(
-        sim_scores,
-        key=lambda x: x[1],
+    # -----------------------------
+    # Input movie keywords
+    # -----------------------------
+
+    input_keywords = set(
+        str(input_movie["keywords_clean"]).split()
+    )
+
+    candidates = []
+
+    for i, movie in df.iterrows():
+
+        # Do not recommend the input movie itself
+        if i == idx:
+            continue
+
+        movie_genres = set(
+            str(movie["genres_clean"]).split()
+        )
+
+        movie_keywords = set(
+            str(movie["keywords_clean"]).split()
+        )
+
+        # -----------------------------
+        # Genre Match
+        # -----------------------------
+
+        common_genres = (
+            input_genres & movie_genres
+        )
+
+        if len(input_genres) == 0:
+            genre_match = 0
+        else:
+            genre_match = (
+                len(common_genres)
+                / len(input_genres)
+            )
+
+        # At least 50% genre match
+        if genre_match < 0.50:
+            continue
+
+        # -----------------------------
+        # Keyword Match
+        # -----------------------------
+
+        common_keywords = (
+            input_keywords & movie_keywords
+        )
+
+        keyword_match_count = len(
+            common_keywords
+        )
+
+        # At least 2 common keywords
+        if keyword_match_count < 2:
+            continue
+
+        # -----------------------------
+        # Cosine Similarity
+        # -----------------------------
+
+        similarity_score = cosine_sim[
+            idx
+        ][i]
+
+        candidates.append({
+            "index": i,
+            "genre_match": genre_match,
+            "keyword_matches": keyword_match_count,
+            "similarity_score": similarity_score
+        })
+
+    # -----------------------------
+    # Sort by Cosine Similarity
+    # -----------------------------
+
+    candidates = sorted(
+        candidates,
+        key=lambda x: x["similarity_score"],
         reverse=True
-    )[1:top_n + 1]
+    )
+
+    candidates = candidates[:top_n]
+
+    if not candidates:
+        return pd.DataFrame(
+            columns=[
+                "Rank",
+                "Movie Title",
+                "Genres",
+                "Keywords",
+                "Genre Match",
+                "Keyword Matches",
+                "Similarity Score"
+            ]
+        )
 
     movie_indices = [
-        i
-        for i, _
-        in sim_scores
+        item["index"]
+        for item in candidates
     ]
 
-    scores = [
-        round(score, 4)
-        for _, score
-        in sim_scores
-    ]
-
-    result = df[
+    result = df.loc[
+        movie_indices,
         [
             "title",
-            "year",
             "genres_clean",
             "keywords_clean"
         ]
-    ].iloc[
-        movie_indices
     ].copy()
 
     result.insert(
@@ -464,16 +538,29 @@ def recommend(
         )
     )
 
-    result[
-        "Similarity Score"
-    ] = scores
+    result["Genre Match"] = [
+        round(
+            item["genre_match"] * 100,
+            1
+        )
+        for item in candidates
+    ]
 
-    result[
-        "keywords_clean"
-    ] = (
-        result[
-            "keywords_clean"
-        ]
+    result["Keyword Matches"] = [
+        item["keyword_matches"]
+        for item in candidates
+    ]
+
+    result["Similarity Score"] = [
+        round(
+            item["similarity_score"],
+            4
+        )
+        for item in candidates
+    ]
+
+    result["keywords_clean"] = (
+        result["keywords_clean"]
         .apply(
             lambda x:
             ", ".join(
@@ -485,15 +572,9 @@ def recommend(
 
     result = result.rename(
         columns={
-
-            "title":
-                "Movie Title",
-
-            "genres_clean":
-                "Genres",
-
-            "keywords_clean":
-                "Keywords"
+            "title": "Movie Title",
+            "genres_clean": "Genres",
+            "keywords_clean": "Keywords"
         }
     )
 
@@ -518,7 +599,6 @@ def recommend(
     return result.reset_index(
         drop=True
     )
-
 
 # ============================================================
 # LOAD COLLABORATIVE DATA
@@ -700,18 +780,16 @@ with tab1:
     )
 
     st.write(
-        "Find movies with similar genres, "
-        "keywords, and plot descriptions."
+        "Find movies with similar genres and keywords."
     )
 
     st.markdown(
         '<div class="feature-card">'
         '<div class="feature-title">'
-        'TF-IDF + Cosine Similarity'
+        'Genre + Keyword + Cosine Similarity'
         '</div>'
         '<div class="feature-description">'
-        'The system compares movie content and '
-        'calculates similarity between movies.'
+        'The system first filters movies by genre and keyword relevance, then uses cosine similarity to rank the final recommendations.'
         '</div>'
         '</div>',
         unsafe_allow_html=True
