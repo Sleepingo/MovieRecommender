@@ -361,22 +361,20 @@ def get_input_features(title):
     movie = df.loc[idx]
 
     keywords_display = (
-        movie["keywords_clean"]
-    )
-
-    if len(keywords_display) > 60:
-
-        keywords_display = (
-            keywords_display[:60]
-            + "..."
+        ", ".join(
+            dict.fromkeys(
+                movie["keywords_clean"].split()
+            )
         )
+        if movie["keywords_clean"]
+        else ""
+    )
 
     return pd.DataFrame({
 
         "Movie": [
             movie["title"]
         ],
-
 
         "Genres": [
             movie["genres_clean"]
@@ -564,7 +562,7 @@ def recommend(title, top_n=10):
         .apply(
             lambda x:
             ", ".join(
-                x.split()[:5]
+                dict.fromkeys(x.split())
             )
             if x else ""
         )
@@ -801,62 +799,29 @@ with tab1:
         .unique()
     )
 
+    default_movie = (
+        df.sort_values("vote_count", ascending=False)
+        .iloc[0]["title"]
+    )
+
+    default_index = (
+        movie_list.index(default_movie)
+        if default_movie in movie_list
+        else 0
+    )
+
     col1, col2 = st.columns(
         [3, 1]
     )
 
     with col1:
 
-        input_method = st.radio(
-            "Select input method:",
-            [
-                "Choose from list",
-                "Type movie name"
-            ],
-            horizontal=True,
-            key="cb_input_method"
+        selected_movie = st.selectbox(
+            "Choose a movie:",
+            movie_list,
+            index=default_index,
+            key="cb_selectbox"
         )
-
-        if (
-            input_method
-            == "Choose from list"
-        ):
-
-            selected_movie = st.selectbox(
-                "Choose a movie:",
-                movie_list,
-                key="cb_selectbox"
-            )
-
-        else:
-
-            user_input = st.text_input(
-                "Type a movie name:",
-                key="cb_text_input",
-                placeholder="e.g. Avatar"
-            )
-
-            selected_movie = None
-
-            if user_input:
-
-                selected_movie = (
-                    find_movie_title(
-                        user_input
-                    )
-                )
-
-                if selected_movie:
-
-                    st.success(
-                        f"✓ Found: {selected_movie}"
-                    )
-
-                else:
-
-                    st.warning(
-                        "Movie not found."
-                    )
 
     with col2:
 
@@ -872,7 +837,7 @@ with tab1:
         "🎬 Get Recommendations",
         key="cb_button",
         use_container_width=True
-    ) and selected_movie:
+    ):
 
         features = get_input_features(
             selected_movie
@@ -909,28 +874,99 @@ with tab1:
             hide_index=True
         )
 
-        avg_score = (
-            results[
-                "Similarity Score"
-            ].mean()
-        )
+        # =================================================
+        # WHY THIS MOVIE?
+        # =================================================
 
-        c1, c2 = st.columns(2)
+        def generate_cb_reason(row):
 
-        with c1:
+            genre_match = row["Genre Match"]
+            keyword_matches = row["Keyword Matches"]
+            similarity = row["Similarity Score"]
 
-            st.metric(
-                "Recommendations",
-                len(results)
+            if genre_match >= 80 and keyword_matches >= 5:
+                return (
+                    "Very similar genres and many "
+                    "shared keywords with the selected movie"
+                )
+            elif genre_match >= 80:
+                return (
+                    "Strong genre similarity "
+                    "with the selected movie"
+                )
+            elif keyword_matches >= 5:
+                return (
+                    "Shares many keywords/themes "
+                    "with the selected movie"
+                )
+            elif similarity >= 0.50:
+                return (
+                    "High overall content similarity "
+                    "with the selected movie"
+                )
+            else:
+                return (
+                    "Meets the minimum genre and "
+                    "keyword overlap requirements"
+                )
+
+        if not results.empty:
+
+            st.markdown(
+                "### 💡 Why this movie?"
             )
 
-        with c2:
-
-            st.metric(
-                "Average Similarity",
-                f"{avg_score:.4f}"
+            st.caption(
+                "The explanation is based on genre "
+                "overlap, keyword matches, and "
+                "cosine similarity."
             )
 
+            for _, row in results.iterrows():
+
+                reason = generate_cb_reason(row)
+
+                st.markdown(
+                    f"**{int(row['Rank'])}. "
+                    f"{row['Movie Title']}**"
+                )
+
+                st.info(
+                    f"💡 {reason}"
+                )
+
+        # =================================================
+        # METRICS
+        # =================================================
+
+        if not results.empty:
+
+            avg_score = (
+                results[
+                    "Similarity Score"
+                ].mean()
+            )
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                st.metric(
+                    "Recommendations",
+                    len(results)
+                )
+
+            with c2:
+
+                st.metric(
+                    "Average Similarity",
+                    f"{avg_score:.4f}"
+                )
+        else:
+
+            st.warning(
+                "No recommendations found for this movie."
+            )
 
 # ============================================================
 # TAB 2 - COLLABORATIVE
@@ -963,6 +999,17 @@ with tab2:
     movie_list_cf = sorted(
         movie_matrix.columns.tolist()
     )
+    default_movie_cf = (
+        df.sort_values("vote_count", ascending=False)
+        .iloc[0]["title"]
+    )
+
+    default_index_cf = (
+        movie_list_cf.index(default_movie_cf)
+        if default_movie_cf in movie_list_cf
+        else 0
+    )
+    
 
     col1, col2 = st.columns(
         [3, 1]
@@ -973,6 +1020,7 @@ with tab2:
         selected_movie_cf = st.selectbox(
             "Choose a movie:",
             movie_list_cf,
+            index=default_index_cf,
             key="cf_movie"
         )
 
@@ -1216,6 +1264,16 @@ with tab3:
             .str.strip()
         )
     )
+    default_hybrid = (
+            df.sort_values("vote_count", ascending=False)
+            .iloc[0]["title"]
+        )
+
+    default_index_hybrid = (
+            hybrid_movies.index(default_hybrid)
+            if default_hybrid in hybrid_movies
+            else 0
+        )
 
     if not hybrid_movies:
 
@@ -1229,6 +1287,7 @@ with tab3:
         selected_hybrid_movie = st.selectbox(
             "Choose a movie:",
             hybrid_movies,
+            index=default_index_hybrid,
             key="hybrid_movie"
         )
 
